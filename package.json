@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "build": "next build --webpack",
-    "start": "next start"
+    "start": "next start --webpack"
   },
   "dependencies": {
     "@central-icons-react/round-outlined-radius-2-stroke-1.5": "^1.1.154",
