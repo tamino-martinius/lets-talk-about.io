@@ -37,6 +37,17 @@ function buildSuggestions(
     });
   }
 
+  if (lineContent.trim() === '' || lineContent.startsWith('?')) {
+    suggestions.push({
+      label: '??? (presenter notes)',
+      kind: monaco.languages.CompletionItemKind.Snippet,
+      insertText: '???\n${1:Speaker notes here}\n',
+      insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+      range,
+      documentation: 'Presenter notes — visible in filmstrip, hidden from slides',
+    });
+  }
+
   const optionSnippets = [
     { label: 'type: section', insertText: 'type: section', doc: 'Section slide with theme background' },
     { label: 'build: true', insertText: 'build: true', doc: 'Progressive reveal for list items' },
@@ -149,7 +160,7 @@ export default function CodeEditor({ value, onChange, onCursorLine }: CodeEditor
 
   const handleMount: OnMount = useCallback((editorInstance, monaco) => {
     monaco.languages.registerCompletionItemProvider('markdown', {
-      triggerCharacters: ['-', ':', '#'],
+      triggerCharacters: ['-', ':', '#', '?'],
       provideCompletionItems(model: editor.ITextModel, position: { lineNumber: number; column: number }) {
         return buildSuggestions(monaco, model, position);
       },

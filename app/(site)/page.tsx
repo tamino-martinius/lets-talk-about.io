@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { IconChart1 } from '@central-icons-react/round-outlined-radius-2-stroke-1.5/IconChart1';
 import { IconGithub } from '@central-icons-react/round-outlined-radius-2-stroke-1.5/IconGithub';
@@ -10,6 +10,7 @@ import { IconPreview } from '@central-icons-react/round-outlined-radius-2-stroke
 import { IconConsoleSimple } from '@central-icons-react/round-outlined-radius-2-stroke-1.5/IconConsoleSimple';
 import { IconSlidesWide } from '@central-icons-react/round-outlined-radius-2-stroke-1.5/IconSlidesWide';
 import { IconLaw } from '@central-icons-react/round-outlined-radius-2-stroke-1.5/IconLaw';
+import { IconNote1 } from '@central-icons-react/round-outlined-radius-2-stroke-1.5/IconNote1';
 
 const CodeEditor = dynamic(() => import('@/components/CodeEditor'), {
   ssr: false,
@@ -28,6 +29,9 @@ title: My Presentation
 
 ## Created with lets-talk-about
 
+???
+Welcome the audience and introduce the topic.
+
 ---
 type: section
 
@@ -42,6 +46,9 @@ type: section
 - Background images
 - Build animations
 
+???
+Emphasize that everything is just markdown.
+
 ---
 build: true
 
@@ -51,6 +58,9 @@ build: true
 - Second point
 - Third point
 - Fourth point
+
+???
+Use build: true to reveal list items one by one.
 
 ---
 
@@ -105,6 +115,111 @@ const THEME_DEFAULTS: Record<string, string> = {
   colorSectionForeground: '#fff',
 };
 
+const SLIDE_KEYS = new Set(['type', 'build', 'background', 'cover', 'class', 'template']);
+
+function isSlideOptions(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const lines = trimmed.split('\n');
+  for (const line of lines) {
+    const match = line.match(/^(\w+):\s*(.+)$/);
+    if (!match) return false;
+    if (!SLIDE_KEYS.has(match[1])) return false;
+  }
+  return true;
+}
+
+function extractNotes(source: string): { cleanSource: string; notes: Map<number, string> } {
+  const notes = new Map<number, string>();
+  const lines = source.split('\n');
+
+  // Detect frontmatter
+  let frontmatterEnd = 0;
+  if (lines[0]?.trim() === '---') {
+    for (let i = 1; i < lines.length; i++) {
+      if (lines[i].trim() === '---') {
+        frontmatterEnd = i + 1;
+        break;
+      }
+    }
+  }
+
+  const frontmatter = lines.slice(0, frontmatterEnd).join('\n');
+  const body = lines.slice(frontmatterEnd).join('\n');
+
+  // Split on \n---\n
+  const segments = body.split('\n---\n');
+  const cleanSegments: string[] = [];
+
+  for (const segment of segments) {
+    // Track code fences to skip ??? inside them
+    const segLines = segment.split('\n');
+    let inFence = false;
+    let noteStart = -1;
+
+    for (let i = 0; i < segLines.length; i++) {
+      const trimmed = segLines[i].trimStart();
+      if (trimmed.startsWith('```')) {
+        inFence = !inFence;
+      }
+      if (!inFence && segLines[i].trim() === '???') {
+        noteStart = i;
+        break;
+      }
+    }
+
+    if (noteStart !== -1) {
+      const slideContent = segLines.slice(0, noteStart).join('\n');
+      const noteContent = segLines.slice(noteStart + 1).join('\n').trim();
+      cleanSegments.push(slideContent);
+      // Store note keyed by segment index (mapped to slide index below)
+      if (noteContent) {
+        cleanSegments[cleanSegments.length - 1] = slideContent;
+        // Tag this segment index with its note
+        notes.set(cleanSegments.length - 1, noteContent);
+      }
+    } else {
+      cleanSegments.push(segment);
+    }
+  }
+
+  // Rejoin clean body
+  const cleanBody = cleanSegments.join('\n---\n');
+  const cleanSource = frontmatter ? frontmatter + '\n' + cleanBody : cleanBody;
+
+  // Now remap segment indices to compiler slide indices
+  // Mirror compiler logic: skip empty, merge pure-option segments
+  const remapped = new Map<number, string>();
+  let slideIndex = 0;
+  let pendingNotes: string[] = [];
+
+  for (let i = 0; i < cleanSegments.length; i++) {
+    const trimmed = cleanSegments[i].trim();
+    const segNote = notes.get(i);
+
+    if (!trimmed) {
+      if (segNote) pendingNotes.push(segNote);
+      continue;
+    }
+
+    if (isSlideOptions(trimmed)) {
+      // Pure options block — not a slide, carry note forward
+      if (segNote) pendingNotes.push(segNote);
+      continue;
+    }
+
+    // This segment produces a slide
+    if (segNote) pendingNotes.push(segNote);
+    if (pendingNotes.length > 0) {
+      remapped.set(slideIndex, pendingNotes.join('\n\n'));
+      pendingNotes = [];
+    }
+    slideIndex++;
+  }
+
+  return { cleanSource, notes: remapped };
+}
+
 function getSlideAtLine(source: string, lineNumber: number): number {
   const lines = source.split('\n');
   let slideIndex = 0;
@@ -133,10 +248,16 @@ function getSlideAtLine(source: string, lineNumber: number): number {
 export default function HomePage() {
   const [source, setSource] = useState(EXAMPLE_SLIDES);
   const [slideCount, setSlideCount] = useState(0);
+  const [notes, setNotes] = useState<Map<number, string>>(new Map());
+  const [activeSlideIndex, setActiveSlideIndex] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const previewReady = useRef(false);
   const pendingSource = useRef<string | null>(null);
   const cursorLineRef = useRef(1);
+  const thumbnailRefs = useRef<(HTMLIFrameElement | null)[]>([]);
+  const thumbnailReady = useRef<boolean[]>([]);
+  const pendingSlidesRef = useRef<{ html: string; title: string; slides: string[] } | null>(null);
+  const filmstripRef = useRef<HTMLDivElement>(null);
 
   const gotoSlide = useCallback((slideIndex: number) => {
     const win = iframeRef.current?.contentWindow;
@@ -147,8 +268,20 @@ export default function HomePage() {
   const handleCursorLine = useCallback((line: number) => {
     cursorLineRef.current = line;
     const slideIndex = getSlideAtLine(source, line);
+    setActiveSlideIndex(slideIndex);
     gotoSlide(slideIndex);
   }, [source, gotoSlide]);
+
+  const sendToThumbnails = useCallback((html: string, title: string, slides: string[]) => {
+    for (let i = 0; i < slides.length; i++) {
+      const win = thumbnailRefs.current[i]?.contentWindow;
+      if (!win || !thumbnailReady.current[i]) continue;
+      win.postMessage(
+        { type: 'slides', html, title, theme: THEME_DEFAULTS, activeSlide: i },
+        '*',
+      );
+    }
+  }, []);
 
   const sendToPreview = useCallback((markdown: string) => {
     if (!iframeRef.current?.contentWindow || !previewReady.current) {
@@ -161,34 +294,60 @@ export default function HomePage() {
       if (!win) return;
 
       try {
+        const { cleanSource, notes: extractedNotes } = extractNotes(markdown.trim());
         const config = { theme: THEME_DEFAULTS };
-        const { title, slides } = compile(markdown.trim(), config);
+        const { title, slides } = compile(cleanSource, config);
+        const html = slides.join('\n');
+
         setSlideCount(slides.length);
+        setNotes(extractedNotes);
 
         const activeSlide = getSlideAtLine(markdown, cursorLineRef.current);
+        setActiveSlideIndex(activeSlide);
 
         win.postMessage(
-          {
-            type: 'slides',
-            html: slides.join('\n'),
-            title,
-            theme: THEME_DEFAULTS,
-            activeSlide,
-          },
+          { type: 'slides', html, title, theme: THEME_DEFAULTS, activeSlide },
           '*',
         );
+
+        // Send to thumbnails
+        pendingSlidesRef.current = { html, title, slides };
+        sendToThumbnails(html, title, slides);
       } catch {
         // Ignore parse errors while user is editing
       }
     });
-  }, []);
+  }, [sendToThumbnails]);
 
   useEffect(() => {
     function handleMessage(e: MessageEvent) {
-      if (e.data?.type === 'preview-ready') {
+      if (e.data?.type !== 'preview-ready') return;
+
+      // Check if this is the main iframe
+      if (e.source === iframeRef.current?.contentWindow) {
         previewReady.current = true;
         sendToPreview(pendingSource.current ?? source);
         pendingSource.current = null;
+        return;
+      }
+
+      // Check if this is a thumbnail iframe
+      for (let i = 0; i < thumbnailRefs.current.length; i++) {
+        if (e.source === thumbnailRefs.current[i]?.contentWindow) {
+          thumbnailReady.current[i] = true;
+          // Send pending slides to this thumbnail
+          const pending = pendingSlidesRef.current;
+          if (pending) {
+            const win = thumbnailRefs.current[i]?.contentWindow;
+            if (win) {
+              win.postMessage(
+                { type: 'slides', html: pending.html, title: pending.title, theme: THEME_DEFAULTS, activeSlide: i },
+                '*',
+              );
+            }
+          }
+          return;
+        }
       }
     }
     window.addEventListener('message', handleMessage);
@@ -199,6 +358,23 @@ export default function HomePage() {
     const timer = setTimeout(() => sendToPreview(source), 300);
     return () => clearTimeout(timer);
   }, [source, sendToPreview]);
+
+  const handleThumbnailClick = useCallback((slideIndex: number) => {
+    setActiveSlideIndex(slideIndex);
+    gotoSlide(slideIndex);
+  }, [gotoSlide]);
+
+  // Auto-scroll filmstrip to keep active thumbnail visible
+  useEffect(() => {
+    const container = filmstripRef.current;
+    if (!container) return;
+    const thumb = container.children[activeSlideIndex] as HTMLElement | undefined;
+    if (!thumb) return;
+    thumb.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }, [activeSlideIndex]);
+
+  // Memoize slide indices for filmstrip rendering
+  const slideIndices = useMemo(() => Array.from({ length: slideCount }, (_, i) => i), [slideCount]);
 
   const lineCount = source.split('\n').length;
 
@@ -240,7 +416,7 @@ export default function HomePage() {
             lets-talk-about
           </span>
           <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-            //&nbsp;markdown&nbsp;&rarr;&nbsp;slides
+            //&nbsp;code&nbsp;&rarr;&nbsp;slides
           </span>
         </div>
 
@@ -347,13 +523,102 @@ export default function HomePage() {
               </span>
             )}
           </div>
-          <div style={{ flex: 1, minHeight: 0, position: 'relative', background: '#000' }}>
-            <iframe
-              ref={iframeRef}
-              src="/preview"
-              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
-              title="Slide preview"
-            />
+
+          {/* Main preview — aspect-ratio letterboxed */}
+          <div style={{
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: '#000',
+            padding: 8,
+          }}>
+            <div style={{
+              aspectRatio: '1100 / 750',
+              maxWidth: '100%',
+              maxHeight: '100%',
+              width: '100%',
+              position: 'relative',
+            }}>
+              <iframe
+                ref={iframeRef}
+                src="/preview"
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
+                title="Slide preview"
+              />
+            </div>
+          </div>
+
+          {/* Filmstrip */}
+          <div style={{
+            height: 160,
+            flexShrink: 0,
+            borderTop: '1px solid var(--border)',
+            background: 'var(--surface-raised)',
+          }}>
+            <div
+              ref={filmstripRef}
+              className="filmstrip-scroll"
+              style={{
+                display: 'flex',
+                gap: 12,
+                padding: '12px 16px',
+                overflowX: 'auto',
+                overflowY: 'hidden',
+                height: '100%',
+                alignItems: 'flex-start',
+              }}
+            >
+              {slideIndices.map((i) => (
+                <div
+                  key={i}
+                  className="filmstrip-thumb"
+                  onClick={() => handleThumbnailClick(i)}
+                  style={{
+                    width: 176,
+                    height: 120,
+                    flexShrink: 0,
+                    borderRadius: 4,
+                    overflow: 'hidden',
+                    border: i === activeSlideIndex
+                      ? '2px solid var(--accent)'
+                      : '2px solid var(--border)',
+                    boxShadow: i === activeSlideIndex
+                      ? '0 0 8px var(--accent-glow)'
+                      : 'none',
+                    transition: 'border-color 0.15s, box-shadow 0.15s',
+                    position: 'relative',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <iframe
+                    ref={(el) => { thumbnailRefs.current[i] = el; }}
+                    src="/preview"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      width: '100%',
+                      height: '100%',
+                      border: 'none',
+                      pointerEvents: 'none',
+                    }}
+                    title={`Slide ${i + 1} thumbnail`}
+                    tabIndex={-1}
+                  />
+                  {notes.get(i) && (
+                    <>
+                      <div className="filmstrip-note-icon">
+                        <IconNote1 size={10} />
+                      </div>
+                      <div className="filmstrip-note-overlay">
+                        {notes.get(i)}
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </main>
