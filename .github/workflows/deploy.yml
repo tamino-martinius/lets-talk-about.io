@@ -23,8 +23,6 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Use npm registry for lets-talk-about
-        run: sed -i 's|"file:../lets-talk-about"|"*"|' package.json
       - run: npm install
         env:
           CENTRAL_LICENSE_KEY: ${{ secrets.CENTRAL_LICENSE_KEY }}
