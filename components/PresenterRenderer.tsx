@@ -97,6 +97,14 @@ export default function PresenterRenderer() {
       const nextIndex = Math.min(startSlide + 1, count - 1);
       sendSlidesToIframe(nextIframeRef.current, msg, nextIndex);
     }
+
+    // Broadcast slides update to standalone viewers
+    channelRef.current?.postMessage({
+      type: 'slides-data',
+      html: msg.html,
+      title: msg.title,
+      theme: msg.theme,
+    });
   }, [sendSlidesToIframe, updateNotes]);
 
   // Message handler
@@ -174,6 +182,15 @@ export default function PresenterRenderer() {
       }
       if (event.data.type === 'request-state') {
         channel.postMessage({ type: 'sync', slide: curSlide, buildStep: 0 });
+      }
+      if (event.data.type === 'request-slides' && pendingSlides.current) {
+        // Send full slides data to newly opened viewer
+        channel.postMessage({
+          type: 'slides-data',
+          html: pendingSlides.current.html,
+          title: pendingSlides.current.title,
+          theme: pendingSlides.current.theme,
+        });
       }
     };
 

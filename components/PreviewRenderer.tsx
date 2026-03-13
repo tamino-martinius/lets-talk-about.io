@@ -71,9 +71,51 @@ export default function PreviewRenderer() {
         if (event.data.type === 'request-state') {
           channelRef.current?.postMessage({ type: 'sync', slide: curSlideRef.current, buildStep: 0 });
         }
+        if (event.data.type === 'slides-data') {
+          // Received slides data from presenter - render directly
+          const section = sectionRef.current;
+          if (!section) return;
+
+          const msg = event.data as { html: string; title: string; theme: Record<string, string> };
+
+          // Apply CSS variables
+          const root = document.documentElement;
+          for (const [key, value] of Object.entries(msg.theme)) {
+            const cssVar = '--' + key.replace(/([A-Z])/g, '-$1').toLowerCase();
+            root.style.setProperty(cssVar, value);
+          }
+
+          // Render slides
+          section.innerHTML = msg.html;
+          document.title = msg.title;
+
+          // Track articles
+          const articles = Array.from(section.querySelectorAll<HTMLElement>('article'));
+          articlesRef.current = articles;
+          curSlideRef.current = 0;
+
+          processBackgrounds(section);
+          if (articles.length) applySlideClasses(articles, 0);
+
+          const mermaidEls = section.querySelectorAll<HTMLElement>('pre.mermaid');
+          if (mermaidEls.length) {
+            import('mermaid').then(({ default: mermaid }) => {
+              const themeColor = getComputedStyle(document.documentElement).getPropertyValue('--color-theme').trim();
+              mermaid.initialize({
+                startOnLoad: false,
+                theme: 'base',
+                themeVariables: { primaryColor: themeColor },
+              });
+              mermaid.run({ nodes: Array.from(mermaidEls) });
+            });
+          }
+
+          document.body.classList.add('loaded');
+        }
       };
 
-      // Request current state from peers
+      // Request slides data and current state from peers
+      channel.postMessage({ type: 'request-slides' });
       channel.postMessage({ type: 'request-state' });
     }
 
