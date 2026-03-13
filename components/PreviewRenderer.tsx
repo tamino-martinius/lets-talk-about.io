@@ -16,6 +16,7 @@ interface GotoSlideMessage {
 }
 
 const SLIDE_CLASSES = ['far-past', 'past', 'current', 'next', 'far-next'];
+const CHANNEL_NAME = 'lets-talk-about:presenter';
 
 function applySlideClasses(articles: HTMLElement[], curSlide: number) {
   for (let i = 0; i < articles.length; i++) {
@@ -47,8 +48,35 @@ export default function PreviewRenderer() {
   const sectionRef = useRef<HTMLElement>(null);
   const curSlideRef = useRef(0);
   const articlesRef = useRef<HTMLElement[]>([]);
+  const channelRef = useRef<BroadcastChannel | null>(null);
+  const suppressBroadcast = useRef(false);
 
   useEffect(() => {
+    const isStandalone = window === window.parent;
+
+    // Set up BroadcastChannel for standalone viewer mode
+    if (isStandalone) {
+      const channel = new BroadcastChannel(CHANNEL_NAME);
+      channelRef.current = channel;
+
+      channel.onmessage = (event) => {
+        if (event.data.type === 'sync') {
+          const articles = articlesRef.current;
+          if (!articles.length) return;
+          const clamped = Math.max(0, Math.min(event.data.slide, articles.length - 1));
+          suppressBroadcast.current = true;
+          curSlideRef.current = clamped;
+          applySlideClasses(articles, clamped);
+        }
+        if (event.data.type === 'request-state') {
+          channelRef.current?.postMessage({ type: 'sync', slide: curSlideRef.current, buildStep: 0 });
+        }
+      };
+
+      // Request current state from peers
+      channel.postMessage({ type: 'request-state' });
+    }
+
     function navigate(delta: number) {
       const articles = articlesRef.current;
       if (!articles.length) return;
@@ -56,6 +84,12 @@ export default function PreviewRenderer() {
       if (next < 0 || next >= articles.length) return;
       curSlideRef.current = next;
       applySlideClasses(articles, next);
+      window.parent.postMessage({ type: 'slide-changed', index: next }, '*');
+
+      // Broadcast sync in standalone mode
+      if (isStandalone && channelRef.current) {
+        channelRef.current.postMessage({ type: 'sync', slide: next, buildStep: 0 });
+      }
     }
 
     function gotoSlide(index: number) {
@@ -100,6 +134,20 @@ export default function PreviewRenderer() {
 
       processBackgrounds(section);
       if (articles.length) applySlideClasses(articles, startSlide);
+
+      const mermaidEls = section.querySelectorAll<HTMLElement>('pre.mermaid');
+      if (mermaidEls.length) {
+        import('mermaid').then(({ default: mermaid }) => {
+          const themeColor = getComputedStyle(document.documentElement).getPropertyValue('--color-theme').trim();
+          mermaid.initialize({
+            startOnLoad: false,
+            theme: 'base',
+            themeVariables: { primaryColor: themeColor },
+          });
+          mermaid.run({ nodes: Array.from(mermaidEls) });
+        });
+      }
+
       document.body.classList.add('loaded');
     }
 
@@ -140,6 +188,7 @@ export default function PreviewRenderer() {
       window.removeEventListener('message', handleMessage);
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('click', handleClick);
+      channelRef.current?.close();
     };
   }, []);
 

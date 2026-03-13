@@ -72,6 +72,12 @@ html, body {
   background: var(--surface-overlay);
 }
 
+/* Split divider */
+.split-divider:hover,
+.split-divider:active {
+  background: var(--accent-dim) !important;
+}
+
 /* Filmstrip */
 .filmstrip-scroll {
   scrollbar-width: thin;
@@ -138,4 +144,33 @@ html, body {
 
 .filmstrip-thumb:hover .filmstrip-note-icon {
   opacity: 0;
+}
+
+/* Presenter notes display */
+.presenter-notes-display h1,
+.presenter-notes-display h2,
+.presenter-notes-display h3 {
+  color: var(--accent);
+  margin: 0.5em 0;
+  text-shadow: none;
+  font-size: 1.2em;
+}
+
+.presenter-notes-display p {
+  margin: 0.5em 0;
+}
+
+.presenter-notes-display ul,
+.presenter-notes-display ol {
+  padding-left: 24px;
+  margin: 0.5em 0;
+  list-style: disc;
+}
+
+.presenter-notes-display code {
+  background: #333;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 14px;
+  color: var(--accent);
 }

@@ -2,12 +2,14 @@
 
 import Editor, { type Monaco, type OnMount, type BeforeMount } from '@monaco-editor/react';
 import type { editor, languages, IRange } from 'monaco-editor';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import type { editor as editorNs } from 'monaco-editor';
 
 interface CodeEditorProps {
   value: string;
   onChange: (value: string) => void;
   onCursorLine?: (line: number) => void;
+  gotoLine?: { line: number; token: number };
 }
 
 function buildSuggestions(
@@ -121,7 +123,16 @@ function buildSuggestions(
 // Custom dark theme matching the site's color scheme
 const THEME_NAME = 'lets-talk-about';
 
-export default function CodeEditor({ value, onChange, onCursorLine }: CodeEditorProps) {
+export default function CodeEditor({ value, onChange, onCursorLine, gotoLine }: CodeEditorProps) {
+  const editorRef = useRef<editorNs.IStandaloneCodeEditor | null>(null);
+
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (!ed || !gotoLine) return;
+    ed.setPosition({ lineNumber: gotoLine.line, column: 1 });
+    ed.revealLineInCenter(gotoLine.line);
+  }, [gotoLine]);
+
   const handleBeforeMount: BeforeMount = useCallback((monaco) => {
     monaco.editor.defineTheme(THEME_NAME, {
       base: 'vs-dark',
@@ -159,6 +170,8 @@ export default function CodeEditor({ value, onChange, onCursorLine }: CodeEditor
   }, []);
 
   const handleMount: OnMount = useCallback((editorInstance, monaco) => {
+    editorRef.current = editorInstance;
+
     monaco.languages.registerCompletionItemProvider('markdown', {
       triggerCharacters: ['-', ':', '#', '?'],
       provideCompletionItems(model: editor.ITextModel, position: { lineNumber: number; column: number }) {

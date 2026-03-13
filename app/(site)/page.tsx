@@ -11,6 +11,7 @@ import { IconConsoleSimple } from '@central-icons-react/round-outlined-radius-2-
 import { IconSlidesWide } from '@central-icons-react/round-outlined-radius-2-stroke-1.5/IconSlidesWide';
 import { IconLaw } from '@central-icons-react/round-outlined-radius-2-stroke-1.5/IconLaw';
 import { IconNote1 } from '@central-icons-react/round-outlined-radius-2-stroke-1.5/IconNote1';
+import { IconPlay } from '@central-icons-react/round-outlined-radius-2-stroke-1.5/IconPlay';
 
 const CodeEditor = dynamic(() => import('@/components/CodeEditor'), {
   ssr: false,
@@ -69,6 +70,17 @@ Use build: true to reveal list items one by one.
 \`\`\`js linenums h2
 const greeting = 'Hello, World!';
 console.log(greeting);
+\`\`\`
+
+---
+
+## Diagrams with Mermaid
+
+\`\`\`mermaid
+graph LR
+    A[Markdown] --> B[Compiler]
+    B --> C[HTML Slides]
+    C --> D[Browser]
 \`\`\`
 
 ---
@@ -245,11 +257,44 @@ function getSlideAtLine(source: string, lineNumber: number): number {
   return slideIndex;
 }
 
+function getLineForSlide(source: string, slideIndex: number): number {
+  const lines = source.split('\n');
+  let frontmatterEnd = 0;
+
+  if (lines[0]?.trim() === '---') {
+    for (let i = 1; i < lines.length; i++) {
+      if (lines[i].trim() === '---') {
+        frontmatterEnd = i + 1;
+        break;
+      }
+    }
+  }
+
+  let currentSlide = 0;
+  if (slideIndex === 0) return frontmatterEnd + 1; // 1-based
+
+  for (let i = frontmatterEnd; i < lines.length; i++) {
+    if (lines[i].trim() === '---') {
+      currentSlide++;
+      if (currentSlide === slideIndex) {
+        // Return the line after the separator (1-based)
+        return i + 2;
+      }
+    }
+  }
+
+  return 1;
+}
+
 export default function HomePage() {
   const [source, setSource] = useState(EXAMPLE_SLIDES);
   const [slideCount, setSlideCount] = useState(0);
   const [notes, setNotes] = useState<Map<number, string>>(new Map());
   const [activeSlideIndex, setActiveSlideIndex] = useState(0);
+  const [editorGotoLine, setEditorGotoLine] = useState<{ line: number; token: number } | undefined>(undefined);
+  const [splitPercent, setSplitPercent] = useState(100 / 3);
+  const dragging = useRef(false);
+  const mainRef = useRef<HTMLElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const previewReady = useRef(false);
   const pendingSource = useRef<string | null>(null);
@@ -258,6 +303,8 @@ export default function HomePage() {
   const thumbnailReady = useRef<boolean[]>([]);
   const pendingSlidesRef = useRef<{ html: string; title: string; slides: string[] } | null>(null);
   const filmstripRef = useRef<HTMLDivElement>(null);
+  const presenterRef = useRef<Window | null>(null);
+  const presenterReady = useRef(false);
 
   const gotoSlide = useCallback((slideIndex: number) => {
     const win = iframeRef.current?.contentWindow;
@@ -313,6 +360,26 @@ export default function HomePage() {
         // Send to thumbnails
         pendingSlidesRef.current = { html, title, slides };
         sendToThumbnails(html, title, slides);
+
+        // Send to presenter if open
+        if (presenterRef.current && presenterReady.current) {
+          // Extract rendered notes HTML from compiled slides
+          const notesObj: Record<string, string> = {};
+          const tmp = document.createElement('div');
+          tmp.innerHTML = html;
+          const articles = tmp.querySelectorAll('article');
+          articles.forEach((article, idx) => {
+            const aside = article.querySelector('.presenter-notes');
+            if (aside) {
+              notesObj[String(idx)] = aside.innerHTML;
+            }
+          });
+
+          presenterRef.current.postMessage(
+            { type: 'slides', html, title, theme: THEME_DEFAULTS, activeSlide, notes: notesObj },
+            '*',
+          );
+        }
       } catch {
         // Ignore parse errors while user is editing
       }
@@ -321,13 +388,59 @@ export default function HomePage() {
 
   useEffect(() => {
     function handleMessage(e: MessageEvent) {
-      if (e.data?.type !== 'preview-ready') return;
+      if (!e.data?.type) return;
+
+      // Slide navigation from main preview iframe
+      if (e.data.type === 'slide-changed' && e.source === iframeRef.current?.contentWindow) {
+        const idx = e.data.index as number;
+        setActiveSlideIndex(idx);
+        const line = getLineForSlide(source, idx);
+        setEditorGotoLine({ line, token: Date.now() });
+        return;
+      }
+
+      if (e.data.type !== 'preview-ready') return;
 
       // Check if this is the main iframe
       if (e.source === iframeRef.current?.contentWindow) {
         previewReady.current = true;
         sendToPreview(pendingSource.current ?? source);
         pendingSource.current = null;
+        return;
+      }
+
+      // Check if this is the presenter window
+      if (presenterRef.current && e.source === presenterRef.current) {
+        presenterReady.current = true;
+        // Compile and send slides directly to presenter
+        import('lets-talk-about/compiler').then(({ compile }) => {
+          try {
+            const { cleanSource, notes: extractedNotes } = extractNotes(source.trim());
+            const config = { theme: THEME_DEFAULTS };
+            const { title, slides } = compile(cleanSource, config);
+            const html = slides.join('\n');
+            const activeSlide = getSlideAtLine(source, cursorLineRef.current);
+
+            // Extract rendered notes HTML from compiled slides
+            const notesObj: Record<string, string> = {};
+            const tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            const articles = tmp.querySelectorAll('article');
+            articles.forEach((article, idx) => {
+              const aside = article.querySelector('.presenter-notes');
+              if (aside) {
+                notesObj[String(idx)] = aside.innerHTML;
+              }
+            });
+
+            presenterRef.current?.postMessage(
+              { type: 'slides', html, title, theme: THEME_DEFAULTS, activeSlide, notes: notesObj },
+              '*',
+            );
+          } catch {
+            // Ignore parse errors
+          }
+        });
         return;
       }
 
@@ -359,10 +472,29 @@ export default function HomePage() {
     return () => clearTimeout(timer);
   }, [source, sendToPreview]);
 
+  const handleDividerPointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    dragging.current = true;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }, []);
+
+  const handleDividerPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragging.current || !mainRef.current) return;
+    const rect = mainRef.current.getBoundingClientRect();
+    const pct = ((e.clientX - rect.left) / rect.width) * 100;
+    setSplitPercent(Math.min(80, Math.max(20, pct)));
+  }, []);
+
+  const handleDividerPointerUp = useCallback(() => {
+    dragging.current = false;
+  }, []);
+
   const handleThumbnailClick = useCallback((slideIndex: number) => {
     setActiveSlideIndex(slideIndex);
     gotoSlide(slideIndex);
-  }, [gotoSlide]);
+    const line = getLineForSlide(source, slideIndex);
+    setEditorGotoLine({ line, token: Date.now() });
+  }, [gotoSlide, source]);
 
   // Auto-scroll filmstrip to keep active thumbnail visible
   useEffect(() => {
@@ -375,6 +507,16 @@ export default function HomePage() {
 
   // Memoize slide indices for filmstrip rendering
   const slideIndices = useMemo(() => Array.from({ length: slideCount }, (_, i) => i), [slideCount]);
+
+  const openPresenter = useCallback(() => {
+    const win = window.open('/presenter', 'lta-presenter');
+    if (win) {
+      presenterRef.current = win;
+      presenterReady.current = false;
+    } else {
+      alert('Popup blocked. Please allow popups for this site.');
+    }
+  }, []);
 
   const lineCount = source.split('\n').length;
 
@@ -460,7 +602,7 @@ export default function HomePage() {
       </nav>
 
       {/* ─── Main content: editor (left) | preview (right) ─── */}
-      <main style={{
+      <main ref={mainRef} style={{
         display: 'flex',
         flex: 1,
         minHeight: 0,
@@ -470,8 +612,7 @@ export default function HomePage() {
         <div style={{
           display: 'flex',
           flexDirection: 'column',
-          width: '50%',
-          borderRight: '1px solid var(--border)',
+          width: `${splitPercent}%`,
         }}>
           <div style={{
             display: 'flex',
@@ -492,15 +633,31 @@ export default function HomePage() {
             </span>
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
-            <CodeEditor value={source} onChange={setSource} onCursorLine={handleCursorLine} />
+            <CodeEditor value={source} onChange={setSource} onCursorLine={handleCursorLine} gotoLine={editorGotoLine} />
           </div>
         </div>
+
+        {/* Draggable divider */}
+        <div
+          className="split-divider"
+          onPointerDown={handleDividerPointerDown}
+          onPointerMove={handleDividerPointerMove}
+          onPointerUp={handleDividerPointerUp}
+          style={{
+            width: 5,
+            flexShrink: 0,
+            cursor: 'col-resize',
+            background: 'var(--border)',
+            transition: dragging.current ? 'none' : 'background 0.15s',
+          }}
+        />
 
         {/* Right — Preview */}
         <div style={{
           display: 'flex',
           flexDirection: 'column',
-          width: '50%',
+          flex: 1,
+          minWidth: 0,
         }}>
           <div style={{
             display: 'flex',
@@ -516,12 +673,28 @@ export default function HomePage() {
               <IconPreview size={13} />
               preview
             </span>
-            {slideCount > 0 && (
-              <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--text-faint)' }}>
-                <IconSlidesWide size={11} />
-                {slideCount}
-              </span>
-            )}
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {slideCount > 0 && (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--text-faint)' }}>
+                  <IconSlidesWide size={11} />
+                  {slideCount}
+                </span>
+              )}
+              <button
+                onClick={openPresenter}
+                title="Open presenter mode"
+                className="nav-link"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  padding: '4px 10px', borderRadius: 4,
+                  fontSize: 10, border: '1px solid var(--accent-dim)',
+                  background: 'var(--accent-glow)', cursor: 'pointer', color: 'var(--accent)',
+                }}
+              >
+                <IconPlay size={10} />
+                present
+              </button>
+            </span>
           </div>
 
           {/* Main preview — aspect-ratio letterboxed */}
