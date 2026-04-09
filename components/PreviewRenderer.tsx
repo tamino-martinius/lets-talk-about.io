@@ -44,6 +44,47 @@ function processBackgrounds(container: HTMLElement) {
   }
 }
 
+function setupMermaidLazyLoading(section: HTMLElement) {
+  const mermaidEls = section.querySelectorAll<HTMLElement>('pre.mermaid');
+  if (!mermaidEls.length) return;
+
+  import('mermaid').then(({ default: mermaid }) => {
+    const themeColor = getComputedStyle(document.documentElement).getPropertyValue('--color-theme').trim();
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'base',
+      themeVariables: { primaryColor: themeColor },
+    });
+
+    // Use IntersectionObserver to render mermaid diagrams when they become visible
+    const renderedElements = new WeakSet<HTMLElement>();
+    const observer = new IntersectionObserver(
+      async (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && !renderedElements.has(entry.target as HTMLElement)) {
+            const element = entry.target as HTMLElement;
+            renderedElements.add(element);
+
+            try {
+              await mermaid.run({ nodes: [element] });
+            } catch (error) {
+              console.error('Failed to render mermaid diagram:', error);
+            }
+
+            observer.unobserve(element);
+          }
+        }
+      },
+      {
+        threshold: 0.1,
+        rootMargin: '100% 0px 100% 0px'
+      }
+    );
+
+    mermaidEls.forEach(el => observer.observe(el));
+  });
+}
+
 export default function PreviewRenderer() {
   const sectionRef = useRef<HTMLElement>(null);
   const curSlideRef = useRef(0);
@@ -96,19 +137,7 @@ export default function PreviewRenderer() {
 
           processBackgrounds(section);
           if (articles.length) applySlideClasses(articles, 0);
-
-          const mermaidEls = section.querySelectorAll<HTMLElement>('pre.mermaid');
-          if (mermaidEls.length) {
-            import('mermaid').then(({ default: mermaid }) => {
-              const themeColor = getComputedStyle(document.documentElement).getPropertyValue('--color-theme').trim();
-              mermaid.initialize({
-                startOnLoad: false,
-                theme: 'base',
-                themeVariables: { primaryColor: themeColor },
-              });
-              mermaid.run({ nodes: Array.from(mermaidEls) });
-            });
-          }
+          setupMermaidLazyLoading(section);
 
           document.body.classList.add('loaded');
         }
@@ -176,19 +205,7 @@ export default function PreviewRenderer() {
 
       processBackgrounds(section);
       if (articles.length) applySlideClasses(articles, startSlide);
-
-      const mermaidEls = section.querySelectorAll<HTMLElement>('pre.mermaid');
-      if (mermaidEls.length) {
-        import('mermaid').then(({ default: mermaid }) => {
-          const themeColor = getComputedStyle(document.documentElement).getPropertyValue('--color-theme').trim();
-          mermaid.initialize({
-            startOnLoad: false,
-            theme: 'base',
-            themeVariables: { primaryColor: themeColor },
-          });
-          mermaid.run({ nodes: Array.from(mermaidEls) });
-        });
-      }
+      setupMermaidLazyLoading(section);
 
       document.body.classList.add('loaded');
     }
