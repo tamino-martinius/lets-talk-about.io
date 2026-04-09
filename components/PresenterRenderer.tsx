@@ -37,32 +37,29 @@ export default function PresenterRenderer() {
   const [slideCount, setSlideCount] = useState(0);
   const [notes, setNotes] = useState('');
   const [timer, setTimer] = useState('00:00:00');
+  const [buildStep, setBuildStep] = useState(0);
+  const [totalBuildSteps, setTotalBuildSteps] = useState(0);
 
   const updateNotes = useCallback((slideIndex: number) => {
     const note = notesMap.current[String(slideIndex)] || '';
     setNotes(note);
   }, []);
 
-  const gotoSlide = useCallback((index: number) => {
-    const clamped = Math.max(0, Math.min(index, slideCountRef.current - 1));
-    setCurSlide(clamped);
-    updateNotes(clamped);
-
-    // Send goto-slide to current iframe
+  // Send navigate message to current iframe (build-step aware)
+  const navigateStep = useCallback((delta: number) => {
     currentIframeRef.current?.contentWindow?.postMessage(
-      { type: 'goto-slide', index: clamped },
+      { type: 'navigate', delta },
       '*',
     );
-    // Send next slide's index to next iframe
-    const nextIndex = Math.min(clamped + 1, slideCountRef.current - 1);
-    nextIframeRef.current?.contentWindow?.postMessage(
-      { type: 'goto-slide', index: nextIndex },
-      '*',
-    );
+  }, []);
 
-    // Broadcast sync
-    channelRef.current?.postMessage({ type: 'sync', slide: clamped, buildStep: 0 });
-  }, [updateNotes]);
+  // Send navigate-slide message to current iframe (skip build steps)
+  const navigateSlide = useCallback((delta: number) => {
+    currentIframeRef.current?.contentWindow?.postMessage(
+      { type: 'navigate-slide', delta },
+      '*',
+    );
+  }, []);
 
   const sendSlidesToIframe = useCallback((iframe: HTMLIFrameElement | null, msg: SlideMessage, activeSlide: number) => {
     const win = iframe?.contentWindow;
@@ -74,14 +71,12 @@ export default function PresenterRenderer() {
   }, []);
 
   const handleSlidesMessage = useCallback((msg: SlideMessage) => {
-    // Count articles in the HTML
     const tmp = document.createElement('div');
     tmp.innerHTML = msg.html;
     const count = tmp.querySelectorAll('article').length;
     slideCountRef.current = count;
     setSlideCount(count);
 
-    // Store notes
     notesMap.current = msg.notes || {};
 
     const startSlide = msg.activeSlide ?? 0;
@@ -92,13 +87,26 @@ export default function PresenterRenderer() {
 
     if (currentReady.current) {
       sendSlidesToIframe(currentIframeRef.current, msg, startSlide);
+      // Enable presenter preview (faded upcoming items) on current iframe
+      setTimeout(() => {
+        currentIframeRef.current?.contentWindow?.postMessage(
+          { type: 'set-presenter-preview', enabled: true },
+          '*',
+        );
+      }, 50);
     }
     if (nextReady.current) {
       const nextIndex = Math.min(startSlide + 1, count - 1);
       sendSlidesToIframe(nextIframeRef.current, msg, nextIndex);
+      // Next iframe shows all build items
+      setTimeout(() => {
+        nextIframeRef.current?.contentWindow?.postMessage(
+          { type: 'goto-slide', index: nextIndex, revealAll: true },
+          '*',
+        );
+      }, 50);
     }
 
-    // Broadcast slides update to standalone viewers
     channelRef.current?.postMessage({
       type: 'slides-data',
       html: msg.html,
@@ -118,6 +126,12 @@ export default function PresenterRenderer() {
           if (pendingSlides.current) {
             const slide = pendingSlides.current.activeSlide ?? 0;
             sendSlidesToIframe(currentIframeRef.current, pendingSlides.current, slide);
+            setTimeout(() => {
+              currentIframeRef.current?.contentWindow?.postMessage(
+                { type: 'set-presenter-preview', enabled: true },
+                '*',
+              );
+            }, 50);
           }
         } else if (e.source === nextIframeRef.current?.contentWindow) {
           nextReady.current = true;
@@ -125,6 +139,12 @@ export default function PresenterRenderer() {
             const slide = pendingSlides.current.activeSlide ?? 0;
             const nextIndex = Math.min(slide + 1, slideCountRef.current - 1);
             sendSlidesToIframe(nextIframeRef.current, pendingSlides.current, nextIndex);
+            setTimeout(() => {
+              nextIframeRef.current?.contentWindow?.postMessage(
+                { type: 'goto-slide', index: nextIndex, revealAll: true },
+                '*',
+              );
+            }, 50);
           }
         }
         return;
@@ -135,22 +155,32 @@ export default function PresenterRenderer() {
         return;
       }
 
+      // Build state reported by current iframe
+      if (e.data.type === 'build-state' && e.source === currentIframeRef.current?.contentWindow) {
+        const { slide, buildStep: step, totalBuildSteps: total } = e.data;
+        setBuildStep(step);
+        setTotalBuildSteps(total);
+        // Forward build step to viewers
+        channelRef.current?.postMessage({ type: 'sync', slide, buildStep: step });
+        return;
+      }
+
       // Slide navigation from current iframe
       if (e.data.type === 'slide-changed' && e.source === currentIframeRef.current?.contentWindow) {
         const idx = e.data.index as number;
         setCurSlide(idx);
         updateNotes(idx);
+        // Update next iframe to show the slide after current, with all builds revealed
         const nextIndex = Math.min(idx + 1, slideCountRef.current - 1);
         nextIframeRef.current?.contentWindow?.postMessage(
-          { type: 'goto-slide', index: nextIndex },
+          { type: 'goto-slide', index: nextIndex, revealAll: true },
           '*',
         );
-        channelRef.current?.postMessage({ type: 'sync', slide: idx, buildStep: 0 });
+        channelRef.current?.postMessage({ type: 'sync', slide: idx, buildStep: e.data.buildStep ?? 0 });
       }
     }
 
     window.addEventListener('message', handleMessage);
-    // Tell opener (or parent if in iframe) we're ready
     const target = window.opener || window.parent;
     if (target && target !== window) {
       target.postMessage({ type: 'preview-ready' }, '*');
@@ -166,7 +196,7 @@ export default function PresenterRenderer() {
 
     channel.onmessage = (event) => {
       if (event.data.type === 'sync') {
-        const { slide, buildStep } = event.data;
+        const { slide, buildStep: step } = event.data;
         const clamped = Math.max(0, Math.min(slide, slideCountRef.current - 1));
         setCurSlide(clamped);
         updateNotes(clamped);
@@ -174,17 +204,24 @@ export default function PresenterRenderer() {
           { type: 'goto-slide', index: clamped },
           '*',
         );
+        if (step !== undefined) {
+          setTimeout(() => {
+            currentIframeRef.current?.contentWindow?.postMessage(
+              { type: 'set-build-step', step },
+              '*',
+            );
+          }, 20);
+        }
         const nextIndex = Math.min(clamped + 1, slideCountRef.current - 1);
         nextIframeRef.current?.contentWindow?.postMessage(
-          { type: 'goto-slide', index: nextIndex },
+          { type: 'goto-slide', index: nextIndex, revealAll: true },
           '*',
         );
       }
       if (event.data.type === 'request-state') {
-        channel.postMessage({ type: 'sync', slide: curSlide, buildStep: 0 });
+        channel.postMessage({ type: 'sync', slide: curSlide, buildStep });
       }
       if (event.data.type === 'request-slides' && pendingSlides.current) {
-        // Send full slides data to newly opened viewer
         channel.postMessage({
           type: 'slides-data',
           html: pendingSlides.current.html,
@@ -195,7 +232,7 @@ export default function PresenterRenderer() {
     };
 
     return () => channel.close();
-  }, [updateNotes, curSlide]);
+  }, [updateNotes, curSlide, buildStep]);
 
   // Timer
   useEffect(() => {
@@ -205,7 +242,7 @@ export default function PresenterRenderer() {
     return () => clearInterval(id);
   }, []);
 
-  // Keyboard
+  // Keyboard — arrows advance build steps, PageUp/PageDown skip full slides
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       switch (e.key) {
@@ -213,35 +250,52 @@ export default function PresenterRenderer() {
         case 'ArrowDown':
         case ' ':
         case 'Enter':
-        case 'PageDown':
-          gotoSlide(curSlide + 1);
+          navigateStep(1);
           e.preventDefault();
           break;
         case 'ArrowLeft':
         case 'ArrowUp':
         case 'Backspace':
+          navigateStep(-1);
+          e.preventDefault();
+          break;
+        case 'PageDown':
+          navigateSlide(1);
+          e.preventDefault();
+          break;
         case 'PageUp':
-          gotoSlide(curSlide - 1);
+          navigateSlide(-1);
           e.preventDefault();
           break;
       }
     }
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [curSlide, gotoSlide]);
+  }, [navigateStep, navigateSlide]);
 
   function openViewer() {
     const win = window.open('/preview', '_blank');
     if (!win) alert('Popup blocked. Please allow popups for this site.');
   }
 
+  const btnStyle = {
+    background: 'var(--presenter-button-bg)',
+    color: 'var(--presenter-button-text)',
+    border: '1px solid var(--presenter-button-border)',
+    borderRadius: 6,
+    padding: '6px 12px',
+    fontSize: 13,
+    cursor: 'pointer',
+    lineHeight: 1,
+  };
+
   return (
     <div style={{
       display: 'flex',
       flexDirection: 'column',
       height: '100vh',
-      background: '#1a1a1a',
-      color: '#eee',
+      background: 'var(--presenter-bg)',
+      color: 'var(--presenter-text)',
       fontFamily: 'Arial, Helvetica, sans-serif',
       overflow: 'hidden',
     }}>
@@ -255,10 +309,10 @@ export default function PresenterRenderer() {
         minHeight: 0,
       }}>
         {/* Current slide */}
-        <div style={{ position: 'relative', background: '#000', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ position: 'relative', background: 'var(--presenter-slide-bg)', borderRadius: 8, overflow: 'hidden' }}>
           <div style={{
             position: 'absolute', top: 8, left: 12, zIndex: 10,
-            fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em',
+            fontSize: 11, color: 'var(--presenter-label)', textTransform: 'uppercase', letterSpacing: '0.05em',
           }}>Current</div>
           <iframe
             ref={currentIframeRef}
@@ -269,10 +323,10 @@ export default function PresenterRenderer() {
         </div>
 
         {/* Next slide */}
-        <div style={{ position: 'relative', background: '#000', borderRadius: 8, overflow: 'hidden', opacity: 0.6 }}>
+        <div style={{ position: 'relative', background: 'var(--presenter-slide-bg)', borderRadius: 8, overflow: 'hidden', opacity: 0.6 }}>
           <div style={{
             position: 'absolute', top: 8, left: 12, zIndex: 10,
-            fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em',
+            fontSize: 11, color: 'var(--presenter-label)', textTransform: 'uppercase', letterSpacing: '0.05em',
           }}>Next</div>
           <iframe
             ref={nextIframeRef}
@@ -290,15 +344,15 @@ export default function PresenterRenderer() {
           maxHeight: 200,
           overflowY: 'auto',
           padding: '12px 20px',
-          background: '#222',
-          borderTop: '1px solid #333',
+          background: 'var(--presenter-notes-bg)',
+          borderTop: '1px solid var(--presenter-notes-border)',
           fontSize: 16,
           lineHeight: 1.6,
-          color: '#ccc',
+          color: 'var(--presenter-notes-text)',
         }}
         dangerouslySetInnerHTML={notes ? { __html: notes } : undefined}
       >
-        {!notes && <span style={{ color: '#555', fontStyle: 'italic' }}>No notes for this slide</span>}
+        {!notes && <span style={{ color: 'var(--presenter-notes-placeholder)', fontStyle: 'italic' }}>No notes for this slide</span>}
       </div>
 
       {/* Controls bar */}
@@ -306,36 +360,47 @@ export default function PresenterRenderer() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 16,
+        gap: 8,
         padding: '10px 20px',
-        background: '#111',
-        borderTop: '1px solid #333',
+        background: 'var(--presenter-controls-bg)',
+        borderTop: '1px solid var(--presenter-controls-border)',
         userSelect: 'none',
       }}>
-        <button
-          onClick={() => gotoSlide(curSlide - 1)}
-          style={{
-            background: '#333', color: '#eee', border: '1px solid #444',
-            borderRadius: 6, padding: '6px 16px', fontSize: 13, cursor: 'pointer',
-          }}
-        >
-          &#9664; Prev
+        {/* Slide-level navigation */}
+        <button onClick={() => navigateSlide(-1)} style={btnStyle} title="Previous slide (PageUp)">
+          &#9664;&#9664;
         </button>
-        <span style={{ fontSize: 14, fontWeight: 600, minWidth: 80, textAlign: 'center', color: '#aaa' }}>
-          {slideCount > 0 ? `${curSlide + 1} / ${slideCount}` : '—'}
+        {/* Step-level navigation */}
+        <button onClick={() => navigateStep(-1)} style={btnStyle} title="Previous step (Arrow Left)">
+          &#9664;
+        </button>
+
+        {/* Status display */}
+        <span style={{
+          fontSize: 13, fontWeight: 600, minWidth: 120, textAlign: 'center',
+          color: 'var(--presenter-counter)', whiteSpace: 'nowrap',
+        }}>
+          {slideCount > 0 ? `${curSlide + 1} / ${slideCount}` : '\u2014'}
+          {totalBuildSteps > 0 && (
+            <span style={{ color: 'var(--presenter-timer)', marginLeft: 8 }}>
+              {'\u2022'} {buildStep}/{totalBuildSteps}
+            </span>
+          )}
         </span>
-        <button
-          onClick={() => gotoSlide(curSlide + 1)}
-          style={{
-            background: '#333', color: '#eee', border: '1px solid #444',
-            borderRadius: 6, padding: '6px 16px', fontSize: 13, cursor: 'pointer',
-          }}
-        >
-          Next &#9654;
+
+        {/* Step-level navigation */}
+        <button onClick={() => navigateStep(1)} style={btnStyle} title="Next step (Arrow Right)">
+          &#9654;
         </button>
+        {/* Slide-level navigation */}
+        <button onClick={() => navigateSlide(1)} style={btnStyle} title="Next slide (PageDown)">
+          &#9654;&#9654;
+        </button>
+
         <span style={{
           fontSize: 18, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
-          color: '#6c6', minWidth: 100, textAlign: 'center',
+          color: 'var(--presenter-timer)', minWidth: 100, textAlign: 'center',
+          marginLeft: 8,
         }}>
           {timer}
         </span>
@@ -343,7 +408,7 @@ export default function PresenterRenderer() {
           onClick={openViewer}
           style={{
             marginLeft: 'auto',
-            background: '#2a3a2a', color: '#6c6', border: '1px solid #4a6a4a',
+            background: 'var(--presenter-viewer-bg)', color: 'var(--presenter-viewer-text)', border: '1px solid var(--presenter-viewer-border)',
             borderRadius: 6, padding: '6px 16px', fontSize: 13, cursor: 'pointer',
           }}
         >

@@ -54,12 +54,14 @@ export default function SlideRenderer() {
 
         document.title = title;
 
+        const style = getComputedStyle(document.documentElement);
+        const v = (name: string) => style.getPropertyValue(name).trim();
         const themeDefaults: Record<string, string> = {
-          colorTheme: '#6c6',
-          colorForeground: '#000',
-          colorBackground: '#fff',
-          colorVignette: '#765',
-          colorSectionForeground: '#fff',
+          colorTheme: v('--slide-theme') || '#6c6',
+          colorForeground: v('--slide-foreground') || '#000',
+          colorBackground: v('--slide-background') || '#fff',
+          colorVignette: v('--slide-vignette') || '#765',
+          colorSectionForeground: v('--slide-section-foreground') || '#fff',
         };
         const merged = { ...themeDefaults, ...theme };
         const root = document.documentElement;
@@ -94,8 +96,8 @@ export default function SlideRenderer() {
           justifyContent: 'center',
           height: '100vh',
           fontFamily: 'system-ui, sans-serif',
-          color: '#fff',
-          background: '#111',
+          color: 'var(--error-text)',
+          background: 'var(--error-bg)',
           padding: '2rem',
           textAlign: 'center',
         }}

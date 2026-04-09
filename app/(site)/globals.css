@@ -33,17 +33,119 @@
 }
 
 :root {
-  --accent: #6c6;
-  --accent-dim: #5a5;
+  /* ── Base palette ── */
+  --color-black: #000;
+  --color-white: #fff;
+  --color-green: #6c6;
+  --color-green-dim: #5a5;
+  --color-green-bright: #7d7;
+  --color-green-soft: #9cd888;
+  --color-green-bg: #2a3a2a;
+  --color-green-border: #4a6a4a;
+  --color-brown: #765;
+  --color-gray-100: #eee;
+  --color-gray-200: #e0e0e0;
+  --color-gray-300: #ddd;
+  --color-gray-400: #bbb;
+  --color-gray-500: #999;
+  --color-gray-600: #888;
+  --color-gray-700: #666;
+  --color-gray-800: #555;
+  --color-gray-900: #444;
+  --color-gray-1000: #333;
+  --color-gray-1100: #2a2a2a;
+  --color-gray-1200: #222;
+  --color-gray-1300: #1a1a1a;
+  --color-gray-1400: #141414;
+  --color-gray-1500: #111;
+  --color-gray-1600: #0c0c0c;
+
+  /* ── Surfaces ── */
+  --surface: var(--color-gray-1600);
+  --surface-raised: var(--color-gray-1400);
+  --surface-overlay: var(--color-gray-1300);
+
+  /* ── Accent ── */
+  --accent: var(--color-green);
+  --accent-dim: var(--color-green-dim);
   --accent-glow: rgba(102, 204, 102, 0.08);
-  --surface: #0c0c0c;
-  --surface-raised: #141414;
-  --surface-overlay: #1a1a1a;
-  --border: #222;
-  --border-subtle: #1a1a1a;
-  --text: #d4d4d4;
-  --text-muted: #666;
-  --text-faint: #444;
+
+  /* ── Text ── */
+  --text: var(--color-gray-200);
+  --text-muted: var(--color-gray-600);
+  --text-faint: var(--color-gray-800);
+
+  /* ── Borders ── */
+  --border: var(--color-gray-1100);
+  --border-subtle: var(--color-gray-1200);
+
+  /* ── Selection ── */
+  --selection-bg: var(--accent);
+  --selection-text: var(--color-black);
+
+  /* ── Editor ── */
+  --editor-bg: var(--surface);
+  --editor-fg: var(--text);
+  --editor-line-highlight: var(--surface-raised);
+  --editor-selection: #66cc6633;
+  --editor-selection-highlight: #66cc6622;
+  --editor-cursor: var(--color-green);
+  --editor-line-number: var(--color-gray-800);
+  --editor-line-number-active: var(--color-gray-500);
+  --editor-indent-guide: var(--border-subtle);
+  --editor-indent-guide-active: var(--color-gray-900);
+  --editor-widget-bg: var(--surface-raised);
+  --editor-widget-border: var(--border-subtle);
+  --editor-suggest-selected: var(--surface-overlay);
+  --editor-suggest-highlight: var(--color-green);
+  --editor-scrollbar: #22222233;
+  --editor-scrollbar-hover: #33333344;
+  --editor-scrollbar-active: #44444455;
+  --editor-comment: var(--color-gray-600);
+  --editor-keyword: var(--color-green-bright);
+  --editor-string: var(--color-green-soft);
+  --editor-number: var(--color-green-bright);
+  --editor-type: var(--color-green-bright);
+  --editor-default: var(--color-gray-100);
+
+  /* ── Presenter ── */
+  --presenter-bg: var(--surface-overlay);
+  --presenter-text: var(--color-gray-100);
+  --presenter-slide-bg: var(--color-black);
+  --presenter-label: var(--color-gray-500);
+  --presenter-notes-bg: var(--color-gray-1200);
+  --presenter-notes-border: var(--color-gray-1000);
+  --presenter-notes-text: var(--color-gray-300);
+  --presenter-notes-placeholder: var(--color-gray-700);
+  --presenter-controls-bg: var(--color-gray-1500);
+  --presenter-controls-border: var(--color-gray-1000);
+  --presenter-button-bg: var(--color-gray-1000);
+  --presenter-button-text: var(--color-gray-100);
+  --presenter-button-border: var(--color-gray-900);
+  --presenter-counter: var(--color-gray-400);
+  --presenter-timer: var(--accent);
+  --presenter-viewer-bg: var(--color-green-bg);
+  --presenter-viewer-text: var(--accent);
+  --presenter-viewer-border: var(--color-green-border);
+
+  /* ── Filmstrip ── */
+  --filmstrip-note-bg: rgba(0, 0, 0, 0.6);
+  --filmstrip-note-overlay: rgba(0, 0, 0, 0.85);
+  --filmstrip-code-bg: var(--color-gray-1000);
+
+  /* ── Error ── */
+  --error-bg: var(--color-gray-1500);
+  --error-text: var(--color-white);
+
+  /* ── Preview ── */
+  --preview-bg: var(--color-black);
+
+  /* ── Slide theme defaults ── */
+  --slide-theme: var(--color-green);
+  --slide-foreground: var(--color-black);
+  --slide-background: var(--color-white);
+  --slide-vignette: var(--color-brown);
+  --slide-section-foreground: var(--color-white);
 }
 
 html, body {
@@ -58,7 +160,7 @@ html, body {
 
 ::selection {
   background: var(--accent);
-  color: #000;
+  color: var(--selection-text);
 }
 
 .nav-link {
@@ -116,7 +218,7 @@ html, body {
   width: 18px;
   height: 18px;
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--filmstrip-note-bg);
   color: var(--accent);
   pointer-events: none;
 }
@@ -126,7 +228,7 @@ html, body {
   inset: 0;
   z-index: 1;
   padding: 8px;
-  background: rgba(0, 0, 0, 0.85);
+  background: var(--filmstrip-note-overlay);
   color: var(--text);
   font-size: 10px;
   line-height: 14px;
@@ -168,7 +270,7 @@ html, body {
 }
 
 .presenter-notes-display code {
-  background: #333;
+  background: var(--filmstrip-code-bg);
   padding: 2px 6px;
   border-radius: 3px;
   font-size: 14px;

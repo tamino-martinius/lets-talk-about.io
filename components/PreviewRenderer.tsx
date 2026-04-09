@@ -13,6 +13,7 @@ interface SlideMessage {
 interface GotoSlideMessage {
   type: 'goto-slide';
   index: number;
+  revealAll?: boolean;
 }
 
 const SLIDE_CLASSES = ['far-past', 'past', 'current', 'next', 'far-next'];
@@ -56,7 +57,6 @@ function setupMermaidLazyLoading(section: HTMLElement) {
       themeVariables: { primaryColor: themeColor },
     });
 
-    // Use IntersectionObserver to render mermaid diagrams when they become visible
     const renderedElements = new WeakSet<HTMLElement>();
     const observer = new IntersectionObserver(
       async (entries) => {
@@ -64,25 +64,46 @@ function setupMermaidLazyLoading(section: HTMLElement) {
           if (entry.isIntersecting && !renderedElements.has(entry.target as HTMLElement)) {
             const element = entry.target as HTMLElement;
             renderedElements.add(element);
-
             try {
               await mermaid.run({ nodes: [element] });
             } catch (error) {
               console.error('Failed to render mermaid diagram:', error);
             }
-
             observer.unobserve(element);
           }
         }
       },
-      {
-        threshold: 0.1,
-        rootMargin: '100% 0px 100% 0px'
-      }
+      { threshold: 0.1, rootMargin: '100% 0px 100% 0px' },
     );
 
     mermaidEls.forEach(el => observer.observe(el));
   });
+}
+
+function makeBuildLists(articles: HTMLElement[]): HTMLElement[][] {
+  const lists: HTMLElement[][] = new Array(articles.length);
+  for (let i = 0; i < articles.length; i++) {
+    lists[i] = [];
+    const slide = articles[i];
+    let selector = '.build > *';
+    if (slide.classList.contains('build')) {
+      selector += ':not(:first-child)';
+    }
+    for (const item of slide.querySelectorAll<HTMLElement>(selector)) {
+      if (item.classList.contains('layout-region')) continue;
+      if (item.classList.contains('presenter-notes')) continue;
+      if (slide.classList.contains('build') && (item.tagName === 'UL' || item.tagName === 'OL')) {
+        for (const li of Array.from(item.children) as HTMLElement[]) {
+          li.classList.add('to-build');
+          lists[i].push(li);
+        }
+      } else {
+        item.classList.add('to-build');
+        lists[i].push(item);
+      }
+    }
+  }
+  return lists;
 }
 
 export default function PreviewRenderer() {
@@ -91,9 +112,44 @@ export default function PreviewRenderer() {
   const articlesRef = useRef<HTMLElement[]>([]);
   const channelRef = useRef<BroadcastChannel | null>(null);
   const suppressBroadcast = useRef(false);
+  const buildItemsRef = useRef<HTMLElement[][]>([]);
+  const buildStepRef = useRef(0);
+  const furthestSlideRef = useRef(0);
+  const presenterStyleRef = useRef<HTMLStyleElement | null>(null);
 
   useEffect(() => {
     const isStandalone = window === window.parent;
+
+    function reportBuildState() {
+      const slide = curSlideRef.current;
+      const items = buildItemsRef.current[slide];
+      window.parent.postMessage({
+        type: 'build-state',
+        slide,
+        buildStep: buildStepRef.current,
+        totalBuildSteps: items ? items.length : 0,
+      }, '*');
+    }
+
+    function setBuildStep(slideIndex: number, step: number) {
+      const items = buildItemsRef.current[slideIndex];
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (i < step) {
+          items[i].classList.remove('to-build');
+        } else {
+          items[i].classList.add('to-build');
+        }
+      }
+      buildStepRef.current = step;
+    }
+
+    function revealAllBuildItems(slideIndex: number) {
+      const items = buildItemsRef.current[slideIndex];
+      if (!items) return;
+      for (const item of items) item.classList.remove('to-build');
+      buildStepRef.current = items.length;
+    }
 
     // Set up BroadcastChannel for standalone viewer mode
     if (isStandalone) {
@@ -108,34 +164,35 @@ export default function PreviewRenderer() {
           suppressBroadcast.current = true;
           curSlideRef.current = clamped;
           applySlideClasses(articles, clamped);
+          setBuildStep(clamped, event.data.buildStep ?? 0);
         }
         if (event.data.type === 'request-state') {
-          channelRef.current?.postMessage({ type: 'sync', slide: curSlideRef.current, buildStep: 0 });
+          channelRef.current?.postMessage({ type: 'sync', slide: curSlideRef.current, buildStep: buildStepRef.current });
         }
         if (event.data.type === 'slides-data') {
-          // Received slides data from presenter - render directly
           const section = sectionRef.current;
           if (!section) return;
 
           const msg = event.data as { html: string; title: string; theme: Record<string, string> };
 
-          // Apply CSS variables
           const root = document.documentElement;
           for (const [key, value] of Object.entries(msg.theme)) {
             const cssVar = '--' + key.replace(/([A-Z])/g, '-$1').toLowerCase();
             root.style.setProperty(cssVar, value);
           }
 
-          // Render slides
+          // Note: innerHTML is used here with compiler-generated HTML (not user input)
           section.innerHTML = msg.html;
           document.title = msg.title;
 
-          // Track articles
           const articles = Array.from(section.querySelectorAll<HTMLElement>('article'));
           articlesRef.current = articles;
           curSlideRef.current = 0;
+          buildStepRef.current = 0;
+          furthestSlideRef.current = 0;
 
           processBackgrounds(section);
+          buildItemsRef.current = makeBuildLists(articles);
           if (articles.length) applySlideClasses(articles, 0);
           setupMermaidLazyLoading(section);
 
@@ -143,32 +200,89 @@ export default function PreviewRenderer() {
         }
       };
 
-      // Request slides data and current state from peers
       channel.postMessage({ type: 'request-slides' });
       channel.postMessage({ type: 'request-state' });
     }
 
-    function navigate(delta: number) {
+    function navigate(delta: number): boolean {
+      const articles = articlesRef.current;
+      if (!articles.length) return false;
+
+      // Forward: try to reveal next build item before advancing slide
+      if (delta > 0) {
+        const items = buildItemsRef.current[curSlideRef.current];
+        if (items && buildStepRef.current < items.length) {
+          items[buildStepRef.current].classList.remove('to-build');
+          buildStepRef.current++;
+          reportBuildState();
+          if (isStandalone && channelRef.current) {
+            channelRef.current.postMessage({ type: 'sync', slide: curSlideRef.current, buildStep: buildStepRef.current });
+          }
+          return false; // did not change slide
+        }
+      }
+
+      const next = curSlideRef.current + delta;
+      if (next < 0 || next >= articles.length) return false;
+      curSlideRef.current = next;
+      buildStepRef.current = 0;
+
+      if (next > furthestSlideRef.current) {
+        furthestSlideRef.current = next;
+      }
+
+      // If returning to a previously visited slide, show all build items
+      if (next < furthestSlideRef.current) {
+        revealAllBuildItems(next);
+      }
+
+      applySlideClasses(articles, next);
+      window.parent.postMessage({ type: 'slide-changed', index: next }, '*');
+      reportBuildState();
+
+      if (isStandalone && channelRef.current) {
+        channelRef.current.postMessage({ type: 'sync', slide: next, buildStep: buildStepRef.current });
+      }
+      return true; // slide changed
+    }
+
+    function navigateSlide(delta: number) {
       const articles = articlesRef.current;
       if (!articles.length) return;
       const next = curSlideRef.current + delta;
       if (next < 0 || next >= articles.length) return;
       curSlideRef.current = next;
+      buildStepRef.current = 0;
+
+      if (next > furthestSlideRef.current) {
+        furthestSlideRef.current = next;
+      }
+      if (next < furthestSlideRef.current) {
+        revealAllBuildItems(next);
+      }
+
       applySlideClasses(articles, next);
       window.parent.postMessage({ type: 'slide-changed', index: next }, '*');
+      reportBuildState();
 
-      // Broadcast sync in standalone mode
       if (isStandalone && channelRef.current) {
-        channelRef.current.postMessage({ type: 'sync', slide: next, buildStep: 0 });
+        channelRef.current.postMessage({ type: 'sync', slide: next, buildStep: buildStepRef.current });
       }
     }
 
-    function gotoSlide(index: number) {
+    function gotoSlide(index: number, revealAll?: boolean) {
       const articles = articlesRef.current;
       if (!articles.length) return;
       const clamped = Math.max(0, Math.min(index, articles.length - 1));
       curSlideRef.current = clamped;
       applySlideClasses(articles, clamped);
+
+      if (revealAll) {
+        revealAllBuildItems(clamped);
+      } else {
+        setBuildStep(clamped, 0);
+      }
+      reportBuildState();
     }
 
     function handleMessage(e: MessageEvent) {
@@ -176,7 +290,36 @@ export default function PreviewRenderer() {
 
       if (e.data.type === 'goto-slide') {
         const msg = e.data as GotoSlideMessage;
-        gotoSlide(msg.index);
+        gotoSlide(msg.index, msg.revealAll);
+        return;
+      }
+
+      if (e.data.type === 'navigate') {
+        navigate(e.data.delta as number);
+        return;
+      }
+
+      if (e.data.type === 'navigate-slide') {
+        navigateSlide(e.data.delta as number);
+        return;
+      }
+
+      if (e.data.type === 'set-build-step') {
+        setBuildStep(curSlideRef.current, e.data.step as number);
+        reportBuildState();
+        return;
+      }
+
+      if (e.data.type === 'set-presenter-preview') {
+        if (e.data.enabled && !presenterStyleRef.current) {
+          const style = document.createElement('style');
+          style.textContent = '.to-build { opacity: 0.25 !important; }';
+          document.head.appendChild(style);
+          presenterStyleRef.current = style;
+        } else if (!e.data.enabled && presenterStyleRef.current) {
+          presenterStyleRef.current.remove();
+          presenterStyleRef.current = null;
+        }
         return;
       }
 
@@ -185,29 +328,31 @@ export default function PreviewRenderer() {
       const section = sectionRef.current;
       if (!section) return;
 
-      // Apply CSS variables
       const root = document.documentElement;
       for (const [key, value] of Object.entries(msg.theme)) {
         const cssVar = '--' + key.replace(/([A-Z])/g, '-$1').toLowerCase();
         root.style.setProperty(cssVar, value);
       }
 
-      // Render slides
+      // Note: innerHTML is used here with compiler-generated HTML (not user input)
       section.innerHTML = msg.html;
       document.title = msg.title;
 
-      // Track articles and set initial slide
       const articles = Array.from(section.querySelectorAll<HTMLElement>('article'));
       articlesRef.current = articles;
 
       const startSlide = msg.activeSlide ?? 0;
       curSlideRef.current = startSlide;
+      buildStepRef.current = 0;
+      furthestSlideRef.current = startSlide;
 
       processBackgrounds(section);
+      buildItemsRef.current = makeBuildLists(articles);
       if (articles.length) applySlideClasses(articles, startSlide);
       setupMermaidLazyLoading(section);
 
       document.body.classList.add('loaded');
+      reportBuildState();
     }
 
     function handleKeyDown(e: KeyboardEvent) {
@@ -247,6 +392,7 @@ export default function PreviewRenderer() {
       window.removeEventListener('message', handleMessage);
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('click', handleClick);
+      presenterStyleRef.current?.remove();
       channelRef.current?.close();
     };
   }, []);

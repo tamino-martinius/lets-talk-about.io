@@ -123,6 +123,27 @@ function buildSuggestions(
 // Custom dark theme matching the site's color scheme
 const THEME_NAME = 'lets-talk-about';
 
+/** Resolve a CSS custom property (including nested var() refs) to a hex color string. */
+function cssColor(varName: string): string {
+  const el = document.createElement('span');
+  el.style.color = `var(${varName})`;
+  document.body.appendChild(el);
+  const computed = getComputedStyle(el).color;
+  el.remove();
+  const m = computed.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+  if (!m) return computed;
+  const hex = '#' + [m[1], m[2], m[3]].map(n => (+n).toString(16).padStart(2, '0')).join('');
+  if (m[4] !== undefined) {
+    return hex + Math.round(parseFloat(m[4]) * 255).toString(16).padStart(2, '0');
+  }
+  return hex;
+}
+
+/** Read a CSS variable value directly (for values already in hex like #rrggbbaa). */
+function cssVar(varName: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+}
+
 export default function CodeEditor({ value, onChange, onCursorLine, gotoLine }: CodeEditorProps) {
   const editorRef = useRef<editorNs.IStandaloneCodeEditor | null>(null);
 
@@ -134,37 +155,40 @@ export default function CodeEditor({ value, onChange, onCursorLine, gotoLine }: 
   }, [gotoLine]);
 
   const handleBeforeMount: BeforeMount = useCallback((monaco) => {
+    const c = (v: string) => cssColor(v);
+    const stripHash = (v: string) => cssColor(v).replace('#', '');
+
     monaco.editor.defineTheme(THEME_NAME, {
       base: 'vs-dark',
       inherit: true,
       rules: [
-        { token: 'comment', foreground: '555555', fontStyle: 'italic' },
-        { token: 'keyword', foreground: '66cc66' },
-        { token: 'string', foreground: '88c070' },
-        { token: 'number', foreground: '66cc66' },
-        { token: 'type', foreground: '66cc66' },
-        { token: '', foreground: 'd4d4d4' },
+        { token: 'comment', foreground: stripHash('--editor-comment'), fontStyle: 'italic' },
+        { token: 'keyword', foreground: stripHash('--editor-keyword') },
+        { token: 'string', foreground: stripHash('--editor-string') },
+        { token: 'number', foreground: stripHash('--editor-number') },
+        { token: 'type', foreground: stripHash('--editor-type') },
+        { token: '', foreground: stripHash('--editor-default') },
       ],
       colors: {
-        'editor.background': '#0c0c0c',
-        'editor.foreground': '#d4d4d4',
-        'editor.lineHighlightBackground': '#141414',
-        'editor.selectionBackground': '#66cc6633',
-        'editorCursor.foreground': '#66cc66',
-        'editor.selectionHighlightBackground': '#66cc6622',
-        'editorLineNumber.foreground': '#333',
-        'editorLineNumber.activeForeground': '#666',
-        'editorIndentGuide.background': '#1a1a1a',
-        'editorIndentGuide.activeBackground': '#333',
-        'editorWidget.background': '#141414',
-        'editorWidget.border': '#222',
-        'editorSuggestWidget.background': '#141414',
-        'editorSuggestWidget.border': '#222',
-        'editorSuggestWidget.selectedBackground': '#1a1a1a',
-        'editorSuggestWidget.highlightForeground': '#66cc66',
-        'scrollbarSlider.background': '#22222233',
-        'scrollbarSlider.hoverBackground': '#33333344',
-        'scrollbarSlider.activeBackground': '#44444455',
+        'editor.background': c('--editor-bg'),
+        'editor.foreground': c('--editor-fg'),
+        'editor.lineHighlightBackground': c('--editor-line-highlight'),
+        'editor.selectionBackground': cssVar('--editor-selection'),
+        'editorCursor.foreground': c('--editor-cursor'),
+        'editor.selectionHighlightBackground': cssVar('--editor-selection-highlight'),
+        'editorLineNumber.foreground': c('--editor-line-number'),
+        'editorLineNumber.activeForeground': c('--editor-line-number-active'),
+        'editorIndentGuide.background': c('--editor-indent-guide'),
+        'editorIndentGuide.activeBackground': c('--editor-indent-guide-active'),
+        'editorWidget.background': c('--editor-widget-bg'),
+        'editorWidget.border': c('--editor-widget-border'),
+        'editorSuggestWidget.background': c('--editor-widget-bg'),
+        'editorSuggestWidget.border': c('--editor-widget-border'),
+        'editorSuggestWidget.selectedBackground': c('--editor-suggest-selected'),
+        'editorSuggestWidget.highlightForeground': c('--editor-suggest-highlight'),
+        'scrollbarSlider.background': cssVar('--editor-scrollbar'),
+        'scrollbarSlider.hoverBackground': cssVar('--editor-scrollbar-hover'),
+        'scrollbarSlider.activeBackground': cssVar('--editor-scrollbar-active'),
       },
     });
   }, []);

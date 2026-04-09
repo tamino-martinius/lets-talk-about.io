@@ -1,3 +1,4 @@
+import '@/app/(site)/globals.css';
 import { Suspense } from 'react';
 import PresenterRenderer from '@/components/PresenterRenderer';
 

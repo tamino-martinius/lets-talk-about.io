@@ -119,13 +119,20 @@ type: section
 # Thank You!
 `;
 
-const THEME_DEFAULTS: Record<string, string> = {
-  colorTheme: '#6c6',
-  colorForeground: '#000',
-  colorBackground: '#fff',
-  colorVignette: '#765',
-  colorSectionForeground: '#fff',
-};
+function getThemeDefaults(): Record<string, string> {
+  if (typeof window === 'undefined') {
+    return { colorTheme: '#6c6', colorForeground: '#000', colorBackground: '#fff', colorVignette: '#765', colorSectionForeground: '#fff' };
+  }
+  const style = getComputedStyle(document.documentElement);
+  const v = (name: string) => style.getPropertyValue(name).trim();
+  return {
+    colorTheme: v('--slide-theme') || '#6c6',
+    colorForeground: v('--slide-foreground') || '#000',
+    colorBackground: v('--slide-background') || '#fff',
+    colorVignette: v('--slide-vignette') || '#765',
+    colorSectionForeground: v('--slide-section-foreground') || '#fff',
+  };
+}
 
 const SLIDE_KEYS = new Set(['type', 'build', 'background', 'cover', 'class', 'template']);
 
@@ -293,6 +300,8 @@ export default function HomePage() {
   const [activeSlideIndex, setActiveSlideIndex] = useState(0);
   const [editorGotoLine, setEditorGotoLine] = useState<{ line: number; token: number } | undefined>(undefined);
   const [splitPercent, setSplitPercent] = useState(100 / 3);
+  const [presentMenuOpen, setPresentMenuOpen] = useState(false);
+  const presentMenuRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const mainRef = useRef<HTMLElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -324,7 +333,7 @@ export default function HomePage() {
       const win = thumbnailRefs.current[i]?.contentWindow;
       if (!win || !thumbnailReady.current[i]) continue;
       win.postMessage(
-        { type: 'slides', html, title, theme: THEME_DEFAULTS, activeSlide: i },
+        { type: 'slides', html, title, theme: getThemeDefaults(), activeSlide: i },
         '*',
       );
     }
@@ -342,7 +351,7 @@ export default function HomePage() {
 
       try {
         const { cleanSource, notes: extractedNotes } = extractNotes(markdown.trim());
-        const config = { theme: THEME_DEFAULTS };
+        const config = { theme: getThemeDefaults() };
         const { title, slides } = compile(cleanSource, config);
         const html = slides.join('\n');
 
@@ -353,7 +362,7 @@ export default function HomePage() {
         setActiveSlideIndex(activeSlide);
 
         win.postMessage(
-          { type: 'slides', html, title, theme: THEME_DEFAULTS, activeSlide },
+          { type: 'slides', html, title, theme: getThemeDefaults(), activeSlide },
           '*',
         );
 
@@ -376,7 +385,7 @@ export default function HomePage() {
           });
 
           presenterRef.current.postMessage(
-            { type: 'slides', html, title, theme: THEME_DEFAULTS, activeSlide, notes: notesObj },
+            { type: 'slides', html, title, theme: getThemeDefaults(), activeSlide, notes: notesObj },
             '*',
           );
         }
@@ -412,14 +421,13 @@ export default function HomePage() {
       // Check if this is the presenter window
       if (presenterRef.current && e.source === presenterRef.current) {
         presenterReady.current = true;
-        // Compile and send slides directly to presenter
+        // Compile and send slides directly to presenter — always start at first slide
         import('lets-talk-about/compiler').then(({ compile }) => {
           try {
             const { cleanSource, notes: extractedNotes } = extractNotes(source.trim());
-            const config = { theme: THEME_DEFAULTS };
+            const config = { theme: getThemeDefaults() };
             const { title, slides } = compile(cleanSource, config);
             const html = slides.join('\n');
-            const activeSlide = getSlideAtLine(source, cursorLineRef.current);
 
             // Extract rendered notes HTML from compiled slides
             const notesObj: Record<string, string> = {};
@@ -434,7 +442,7 @@ export default function HomePage() {
             });
 
             presenterRef.current?.postMessage(
-              { type: 'slides', html, title, theme: THEME_DEFAULTS, activeSlide, notes: notesObj },
+              { type: 'slides', html, title, theme: getThemeDefaults(), activeSlide: presenterStartSlide.current, notes: notesObj },
               '*',
             );
           } catch {
@@ -454,7 +462,7 @@ export default function HomePage() {
             const win = thumbnailRefs.current[i]?.contentWindow;
             if (win) {
               win.postMessage(
-                { type: 'slides', html: pending.html, title: pending.title, theme: THEME_DEFAULTS, activeSlide: i },
+                { type: 'slides', html: pending.html, title: pending.title, theme: getThemeDefaults(), activeSlide: i },
                 '*',
               );
             }
@@ -508,7 +516,10 @@ export default function HomePage() {
   // Memoize slide indices for filmstrip rendering
   const slideIndices = useMemo(() => Array.from({ length: slideCount }, (_, i) => i), [slideCount]);
 
-  const openPresenter = useCallback(() => {
+  const presenterStartSlide = useRef(0);
+
+  const openPresenter = useCallback((startSlide = 0) => {
+    presenterStartSlide.current = startSlide;
     const win = window.open('/presenter', 'lta-presenter');
     if (win) {
       presenterRef.current = win;
@@ -517,6 +528,18 @@ export default function HomePage() {
       alert('Popup blocked. Please allow popups for this site.');
     }
   }, []);
+
+  // Close present menu on outside click
+  useEffect(() => {
+    if (!presentMenuOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (presentMenuRef.current && !presentMenuRef.current.contains(e.target as Node)) {
+        setPresentMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [presentMenuOpen]);
 
   const lineCount = source.split('\n').length;
 
@@ -680,20 +703,56 @@ export default function HomePage() {
                   {slideCount}
                 </span>
               )}
-              <button
-                onClick={openPresenter}
-                title="Open presenter mode"
-                className="nav-link"
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 4,
-                  padding: '4px 10px', borderRadius: 4,
-                  fontSize: 10, border: '1px solid var(--accent-dim)',
-                  background: 'var(--accent-glow)', cursor: 'pointer', color: 'var(--accent)',
-                }}
-              >
-                <IconPlay size={10} />
-                present
-              </button>
+              <div ref={presentMenuRef} style={{ position: 'relative', display: 'inline-flex' }}>
+                <button
+                  onClick={() => setPresentMenuOpen(v => !v)}
+                  title="Presentation options"
+                  style={{
+                    display: 'flex', alignItems: 'center',
+                    padding: '4px 4px 4px 6px', borderRadius: '4px 0 0 4px',
+                    fontSize: 8, border: '1px solid var(--accent-dim)', borderRight: 'none',
+                    background: 'var(--accent-glow)', cursor: 'pointer', color: 'var(--accent)',
+                  }}
+                >
+                  &#9662;
+                </button>
+                <button
+                  onClick={() => openPresenter(0)}
+                  title="Start presentation from beginning"
+                  className="nav-link"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 4,
+                    padding: '4px 10px 4px 6px', borderRadius: '0 4px 4px 0',
+                    fontSize: 10, border: '1px solid var(--accent-dim)',
+                    background: 'var(--accent-glow)', cursor: 'pointer', color: 'var(--accent)',
+                  }}
+                >
+                  <IconPlay size={10} />
+                  present
+                </button>
+                {presentMenuOpen && (
+                  <div style={{
+                    position: 'absolute', top: '100%', right: 0, marginTop: 4,
+                    background: 'var(--surface-raised)', border: '1px solid var(--border)',
+                    borderRadius: 6, padding: 4, zIndex: 100, whiteSpace: 'nowrap',
+                    boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+                  }}>
+                    <button
+                      onClick={() => { setPresentMenuOpen(false); openPresenter(activeSlideIndex); }}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left',
+                        padding: '6px 12px', borderRadius: 4, border: 'none',
+                        background: 'transparent', color: 'var(--text)', cursor: 'pointer',
+                        fontSize: 11,
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface-overlay)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      Start at current slide ({activeSlideIndex + 1})
+                    </button>
+                  </div>
+                )}
+              </div>
             </span>
           </div>
 
@@ -704,7 +763,7 @@ export default function HomePage() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            background: '#000',
+            background: 'var(--preview-bg)',
             padding: 8,
           }}>
             <div style={{
