@@ -580,8 +580,13 @@ export default function HomePage() {
           <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--accent)' }}>
             lets-talk-about
           </span>
-          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-            //&nbsp;code&nbsp;&rarr;&nbsp;slides
+          <span style={{ fontSize: 11, color: 'var(--text-faint)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            //
+            <IconMarkdown size={12} />
+            code
+            &rarr;
+            <IconSlidesWide size={12} />
+            slides
           </span>
         </div>
 
